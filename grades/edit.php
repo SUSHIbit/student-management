@@ -1,11 +1,20 @@
 <?php
 /**
- * Add Grade Form
+ * Edit Grade Form
  * Student Management System - Phase 4
  */
 
 // Start output buffering to prevent header issues
 ob_start();
+
+// Get grade ID from URL
+$grade_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+
+if ($grade_id <= 0) {
+    ob_end_clean();
+    header('Location: index.php');
+    exit();
+}
 
 // Start session if not already started
 if (session_status() == PHP_SESSION_NONE) {
@@ -19,17 +28,34 @@ require_once '../includes/functions.php';
 // Check if user is logged in
 require_login();
 
-$page_title = 'Add Grade';
+// Get grade details
+$stmt = $pdo->prepare("
+    SELECT g.*, s.first_name, s.last_name, s.student_number, 
+           sub.subject_code, sub.subject_name
+    FROM grades g
+    JOIN students s ON g.student_id = s.student_id
+    JOIN subjects sub ON g.subject_id = sub.subject_id
+    WHERE g.grade_id = ?
+");
+$stmt->execute([$grade_id]);
+$grade = $stmt->fetch();
+
+if (!$grade) {
+    show_alert('Grade not found.', 'danger');
+    ob_end_clean();
+    header('Location: index.php');
+    exit();
+}
+
+$page_title = 'Edit Grade';
 $breadcrumbs = [
     ['name' => 'Grades', 'url' => 'index.php'],
-    ['name' => 'Add Grade']
+    ['name' => $grade['first_name'] . ' ' . $grade['last_name'], 'url' => 'view.php?id=' . $grade_id],
+    ['name' => 'Edit']
 ];
 
 $errors = [];
-$form_data = [];
-
-// Get student_id from URL if provided
-$student_id = isset($_GET['student_id']) ? (int)$_GET['student_id'] : 0;
+$form_data = $grade; // Pre-fill with existing data
 
 // Grade calculation function
 function calculate_grade($total_marks) {
@@ -100,23 +126,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors['academic_year'] = 'Academic year is required.';
     }
 
-    // Check for duplicate grade entry
+    // Check for duplicate grade entry (excluding current grade)
     if ($form_data['student_id'] > 0 && $form_data['subject_id'] > 0 && $form_data['semester'] > 0) {
         $stmt = $pdo->prepare("
             SELECT grade_id FROM grades 
-            WHERE student_id = ? AND subject_id = ? AND semester = ? AND academic_year = ?
+            WHERE student_id = ? AND subject_id = ? AND semester = ? AND academic_year = ? AND grade_id != ?
         ");
-        $stmt->execute([$form_data['student_id'], $form_data['subject_id'], $form_data['semester'], $form_data['academic_year']]);
+        $stmt->execute([$form_data['student_id'], $form_data['subject_id'], $form_data['semester'], $form_data['academic_year'], $grade_id]);
         if ($stmt->fetch()) {
             $errors['general'] = 'Grade already exists for this student, subject, and semester.';
         }
     }
 
-    // If no errors, insert the grade
+    // If no errors, update the grade
     if (empty($errors)) {
         try {
-            $sql = "INSERT INTO grades (student_id, subject_id, assignment_marks, quiz_marks, midterm_marks, final_marks, total_marks, grade_letter, semester, academic_year) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $sql = "UPDATE grades SET 
+                    student_id = ?, subject_id = ?, assignment_marks = ?, quiz_marks = ?, 
+                    midterm_marks = ?, final_marks = ?, total_marks = ?, grade_letter = ?, 
+                    semester = ?, academic_year = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE grade_id = ?";
             
             $stmt = $pdo->prepare($sql);
             $stmt->execute([
@@ -129,7 +158,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $form_data['total_marks'],
                 $form_data['grade_letter'],
                 $form_data['semester'],
-                $form_data['academic_year']
+                $form_data['academic_year'],
+                $grade_id
             ]);
 
             // Get student and subject names for logging
@@ -142,17 +172,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $subject = $stmt->fetch();
 
             // Log activity
-            log_activity('Grade Added', "Added grade for {$student['first_name']} {$student['last_name']} in {$subject['subject_code']}: {$form_data['grade_letter']}");
+            log_activity('Grade Updated', "Updated grade for {$student['first_name']} {$student['last_name']} in {$subject['subject_code']}: {$form_data['grade_letter']}");
 
             // Success message and redirect
-            show_alert('Grade added successfully!', 'success');
+            show_alert('Grade updated successfully!', 'success');
             ob_end_clean();
-            header('Location: index.php');
+            header('Location: view.php?id=' . $grade_id);
             exit();
 
         } catch (Exception $e) {
-            $errors['general'] = 'Failed to add grade. Please try again.';
-            error_log("Error adding grade: " . $e->getMessage());
+            $errors['general'] = 'Failed to update grade. Please try again.';
+            error_log("Error updating grade: " . $e->getMessage());
         }
     }
 }
@@ -177,30 +207,23 @@ $subjects_sql = "
 ";
 $subjects = $pdo->query($subjects_sql)->fetchAll();
 
-// Set default academic year
-if (empty($form_data['academic_year'])) {
-    $current_year = date('Y');
-    $next_year = $current_year + 1;
-    $form_data['academic_year'] = $current_year . '/' . $next_year;
-}
-
-// Pre-select student if provided in URL
-if ($student_id > 0) {
-    $form_data['student_id'] = $student_id;
-}
-
 // Include header after all processing
 require_once '../includes/header.php';
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h1 class="h3 mb-0">Add Grade</h1>
-        <p class="text-muted">Enter student grade information</p>
+        <h1 class="h3 mb-0">Edit Grade</h1>
+        <p class="text-muted">Update grade information</p>
     </div>
-    <a href="index.php" class="btn btn-outline-secondary">
-        <i class="bi bi-arrow-left"></i> Back to Grades
-    </a>
+    <div class="btn-group" role="group">
+        <a href="view.php?id=<?php echo $grade_id; ?>" class="btn btn-outline-info">
+            <i class="bi bi-eye"></i> View Details
+        </a>
+        <a href="index.php" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to List
+        </a>
+    </div>
 </div>
 
 <?php if (!empty($errors['general'])): ?>
@@ -213,6 +236,28 @@ require_once '../includes/header.php';
 <div class="row">
     <div class="col-lg-8">
         <form method="POST" action="" class="needs-validation" novalidate id="gradeForm">
+            <!-- Current Grade Info -->
+            <div class="card mb-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">
+                        <i class="bi bi-info-circle"></i>
+                        Current Grade Information
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <strong>Student:</strong> <?php echo $grade['first_name'] . ' ' . $grade['last_name']; ?><br>
+                            <strong>Student Number:</strong> <?php echo $grade['student_number']; ?>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Subject:</strong> <?php echo $grade['subject_code'] . ' - ' . $grade['subject_name']; ?><br>
+                            <strong>Current Grade:</strong> <span class="badge bg-primary"><?php echo $grade['grade_letter']; ?></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Student and Subject Selection -->
             <div class="card mb-4">
                 <div class="card-header">
@@ -389,21 +434,26 @@ require_once '../includes/header.php';
                     </div>
 
                     <!-- Grade Preview -->
-                    <div class="grade-preview mt-4 p-3 bg-light rounded" id="gradePreview" style="display: none;">
+                    <div class="grade-preview mt-4 p-3 bg-light rounded" id="gradePreview">
                         <div class="row text-center">
                             <div class="col-md-4">
                                 <h6>Total Marks</h6>
-                                <h3 class="text-primary" id="totalMarks">0.0</h3>
+                                <h3 class="text-primary" id="totalMarks"><?php echo number_format($grade['total_marks'], 1); ?></h3>
                                 <small class="text-muted">Weighted Average</small>
                             </div>
                             <div class="col-md-4">
                                 <h6>Letter Grade</h6>
-                                <h3 class="text-success" id="letterGrade">-</h3>
+                                <h3 class="text-success" id="letterGrade"><?php echo $grade['grade_letter']; ?></h3>
                                 <small class="text-muted">Final Grade</small>
                             </div>
                             <div class="col-md-4">
                                 <h6>Grade Points</h6>
-                                <h3 class="text-info" id="gradePoints">0.0</h3>
+                                <h3 class="text-info" id="gradePoints">
+                                    <?php
+                                    $gpa_map = ['A+' => 4.0, 'A' => 4.0, 'A-' => 3.7, 'B+' => 3.3, 'B' => 3.0, 'B-' => 2.7, 'C+' => 2.3, 'C' => 2.0, 'C-' => 1.7, 'D' => 1.0, 'F' => 0.0];
+                                    echo number_format($gpa_map[$grade['grade_letter']] ?? 0, 1);
+                                    ?>
+                                </h3>
                                 <small class="text-muted">GPA Contribution</small>
                             </div>
                         </div>
@@ -418,7 +468,7 @@ require_once '../includes/header.php';
                             <i class="bi bi-arrow-left"></i> Cancel
                         </button>
                         <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-save"></i> Add Grade
+                            <i class="bi bi-save"></i> Update Grade
                         </button>
                     </div>
                 </div>
@@ -426,7 +476,7 @@ require_once '../includes/header.php';
         </form>
     </div>
 
-    <!-- Help & Grade Scale -->
+    <!-- Grade Scale & Information -->
     <div class="col-lg-4">
         <div class="card">
             <div class="card-header">
@@ -499,46 +549,25 @@ require_once '../includes/header.php';
         <div class="card mt-3">
             <div class="card-header">
                 <h6 class="mb-0">
-                    <i class="bi bi-lightbulb"></i>
-                    Tips
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Important Notes
                 </h6>
             </div>
             <div class="card-body">
-                <ul class="list-unstyled small">
-                    <li class="mb-2">
-                        <i class="bi bi-check-circle text-success"></i>
-                        Enter marks as percentages (0-100)
-                    </li>
-                    <li class="mb-2">
-                        <i class="bi bi-check-circle text-success"></i>
-                        Semester will auto-fill based on subject
-                    </li>
-                    <li class="mb-2">
-                        <i class="bi bi-check-circle text-success"></i>
-                        Total grade is calculated automatically
-                    </li>
-                    <li class="mb-2">
-                        <i class="bi bi-check-circle text-success"></i>
-                        Academic year format: YYYY/YYYY
-                    </li>
-                    <li>
-                        <i class="bi bi-check-circle text-success"></i>
-                        Duplicate grades are not allowed
-                    </li>
-                </ul>
-            </div>
-        </div>
-
-        <!-- Selected Student Info -->
-        <div class="card mt-3" id="studentInfo" style="display: none;">
-            <div class="card-header">
-                <h6 class="mb-0">
-                    <i class="bi bi-person"></i>
-                    Selected Student
-                </h6>
-            </div>
-            <div class="card-body">
-                <div id="studentDetails"></div>
+                <div class="alert alert-warning">
+                    <small>
+                        <strong>Editing Impact:</strong><br>
+                        • Changes will affect student's GPA<br>
+                        • Updated grade will appear on transcripts<br>
+                        • Academic standing may be affected
+                    </small>
+                </div>
+                
+                <div class="d-grid">
+                    <a href="view.php?id=<?php echo $grade_id; ?>" class="btn btn-outline-primary btn-sm">
+                        <i class="bi bi-eye"></i> View Grade Details
+                    </a>
+                </div>
             </div>
         </div>
     </div>
@@ -574,11 +603,6 @@ function calculateGrade() {
     document.getElementById('totalMarks').textContent = total.toFixed(1);
     document.getElementById('letterGrade').textContent = letterGrade;
     document.getElementById('gradePoints').textContent = gradePoints.toFixed(1);
-    
-    // Show preview if any marks are entered
-    if (assignment > 0 || quiz > 0 || midterm > 0 || final > 0) {
-        document.getElementById('gradePreview').style.display = 'block';
-    }
 }
 
 // Auto-fill semester based on subject selection
@@ -589,41 +613,15 @@ document.getElementById('subject_id').addEventListener('change', function() {
     }
 });
 
-// Show student info when selected
-document.getElementById('student_id').addEventListener('change', function() {
-    const selectedOption = this.options[this.selectedIndex];
-    const studentInfo = document.getElementById('studentInfo');
-    const studentDetails = document.getElementById('studentDetails');
-    
-    if (this.value) {
-        const studentText = selectedOption.textContent;
-        const course = selectedOption.dataset.course;
-        const year = selectedOption.dataset.year;
-        
-        studentDetails.innerHTML = `
-            <p class="mb-1"><strong>Student:</strong> ${studentText.split(' - ')[1]}</p>
-            <p class="mb-1"><strong>Student Number:</strong> ${studentText.split(' - ')[0]}</p>
-            <p class="mb-1"><strong>Course:</strong> ${course}</p>
-            <p class="mb-0"><strong>Year Level:</strong> ${year}</p>
-        `;
-        studentInfo.style.display = 'block';
-    } else {
-        studentInfo.style.display = 'none';
-    }
-});
-
 // Add event listeners for real-time calculation
 document.getElementById('assignment_marks').addEventListener('input', calculateGrade);
 document.getElementById('quiz_marks').addEventListener('input', calculateGrade);
 document.getElementById('midterm_marks').addEventListener('input', calculateGrade);
 document.getElementById('final_marks').addEventListener('input', calculateGrade);
 
-// Initialize if student is pre-selected
+// Initialize calculation on page load
 document.addEventListener('DOMContentLoaded', function() {
-    const studentSelect = document.getElementById('student_id');
-    if (studentSelect.value) {
-        studentSelect.dispatchEvent(new Event('change'));
-    }
+    calculateGrade();
 });
 </script>
 

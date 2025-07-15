@@ -4,13 +4,26 @@
  * Student Management System - Phase 2
  */
 
+// Start output buffering to prevent header issues
+ob_start();
+
+// Start session if not already started
+if (session_status() == PHP_SESSION_NONE) {
+    session_start();
+}
+
+// Include required files
+require_once '../config/database.php';
+require_once '../includes/functions.php';
+
+// Check if user is logged in
+require_login();
+
 $page_title = 'Add Student';
 $breadcrumbs = [
     ['name' => 'Students', 'url' => 'index.php'],
     ['name' => 'Add Student']
 ];
-
-require_once '../includes/header.php';
 
 $errors = [];
 $form_data = [];
@@ -105,6 +118,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // Success message and redirect
             show_alert('Student added successfully!', 'success');
+            
+            // Clean output buffer before redirect
+            ob_end_clean();
             header('Location: index.php');
             exit();
 
@@ -122,6 +138,9 @@ $courses = get_all_courses();
 if (empty($form_data['student_number'])) {
     $form_data['student_number'] = generate_student_number();
 }
+
+// Include header after all processing
+require_once '../includes/header.php';
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
